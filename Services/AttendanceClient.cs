@@ -17,49 +17,48 @@ namespace DiscordAsistenciaBot.Services
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (compatible; DiscordBot/1.0)");
         }
 
-        public async Task<bool> MarkEntryAsync()
+        public async Task<(bool Success, string Message)> MarkEntryAsync()
         {
             var url = _configuration["Attendance:EntryUrl"];
-            if (string.IsNullOrEmpty(url)) return false;
+            if (string.IsNullOrEmpty(url)) return (false, "URL no configurada");
 
             return await CallUrlAsync(url, "ENTRADA");
         }
 
-        public async Task<bool> MarkExitAsync()
+        public async Task<(bool Success, string Message)> MarkExitAsync()
         {
             var url = _configuration["Attendance:ExitUrl"];
-            if (string.IsNullOrEmpty(url)) return false;
+            if (string.IsNullOrEmpty(url)) return (false, "URL no configurada");
 
             return await CallUrlAsync(url, "SALIDA");
         }
 
-        private async Task<bool> CallUrlAsync(string url, string type)
+        private async Task<(bool Success, string Message)> CallUrlAsync(string url, string type)
         {
             try
             {
                 _logger.LogInformation("Marcando {Type} en URL: {Url}", type, url);
-                // Nota: Las URLs provistas son GET o POST? Generalmente clicks en navegador son GET.
-                // Asumiremos GET. Si falla, el usuario puede confirmar.
                 var response = await _httpClient.GetAsync(url);
-                
-                // Opcional: leer contenido para verificar éxito
                 var content = await response.Content.ReadAsStringAsync();
                 
-                if (response.IsSuccessStatusCode)
+                // La validación original era IsSuccessStatusCode, pero el usuario menciona que la página retorna "exito" en el texto.
+                // Mantendremos IsSuccessStatusCode como base, pero el contenido es lo importante ahora.
+                
+                 if (response.IsSuccessStatusCode)
                 {
-                    _logger.LogInformation("{Type} marcada exitosamente. Respuesta: {Status}", type, response.StatusCode);
-                    return true;
+                    _logger.LogInformation("{Type} respuesta: {Content}", type, content);
+                    return (true, content);
                 }
                 else
                 {
-                    _logger.LogWarning("Error al marcar {Type}. Status: {Status}. Content: {Content}", type, response.StatusCode, content);
-                    return false;
+                    _logger.LogWarning("Error HTTP al marcar {Type}. Status: {Status}", type, response.StatusCode);
+                    return (false, $"Error HTTP {response.StatusCode}: {content}");
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Excepción al marcar {Type}", type);
-                return false;
+                return (false, $"Excepción: {ex.Message}");
             }
         }
     }

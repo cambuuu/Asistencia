@@ -73,6 +73,12 @@ namespace DiscordAsistenciaBot
                     }
                 }
 
+                if (nowChile.Hour == 23 && nowChile.Minute == 00 && ShouldRun("LIMPIEZA", nowChile))
+                {
+                    await _discordService.CleanupChannelAsync();
+                    MarkRun("LIMPIEZA", nowChile);
+                }
+
                 // Esperar 20 segundos antes de volver a verificar para no saturar CPU, 
                 // pero ser precisos con el minuto
                 await Task.Delay(20000, stoppingToken);
@@ -81,6 +87,7 @@ namespace DiscordAsistenciaBot
 
         private DateTime? _lastEntryRun;
         private DateTime? _lastExitRun;
+        private DateTime? _lastCleanupRun;
 
         private bool ShouldRun(string type, DateTime now)
         {
@@ -93,6 +100,11 @@ namespace DiscordAsistenciaBot
             if (type == "SALIDA")
             {
                 if (_lastExitRun.HasValue && _lastExitRun.Value.Date == now.Date) return false;
+                return true;
+            }
+            if (type == "LIMPIEZA")
+            {
+                if (_lastCleanupRun.HasValue && _lastCleanupRun.Value.Date == now.Date) return false;
                 return true;
             }
             return false;
@@ -121,7 +133,8 @@ namespace DiscordAsistenciaBot
         private void MarkRun(string type, DateTime now)
         {
             if (type == "ENTRADA") _lastEntryRun = now;
-            else _lastExitRun = now;
+            else if (type == "SALIDA") _lastExitRun = now;
+            else if (type == "LIMPIEZA") _lastCleanupRun = now;
         }
     }
 }

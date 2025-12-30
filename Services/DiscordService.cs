@@ -98,6 +98,27 @@ namespace DiscordAsistenciaBot.Services
             _logger.LogInformation("Mensaje de {Type} enviado al canal {Channel}", buttonId, channel.Name);
         }
 
+        public async Task CleanupChannelAsync()
+        {
+            var channelIdStr = _configuration["Discord:TargetChannelId"];
+            if (!ulong.TryParse(channelIdStr, out var channelId)) return;
+
+            if (await _client.GetChannelAsync(channelId) is not IMessageChannel channel) return;
+
+            var messages = await channel.GetMessagesAsync(limit: 20).FlattenAsync();
+            var botMessages = messages.Where(m => m.Author.Id == _client.CurrentUser.Id);
+
+            if (botMessages.Any())
+            {
+               _logger.LogInformation("Eliminando {Count} mensajes del bot...", botMessages.Count());
+               // Necesita permiso MANAGE_MESSAGES si son de otros, pero si son propios puede borrarlos.
+               foreach(var msg in botMessages)
+               {
+                   try { await msg.DeleteAsync(); await Task.Delay(1000); } catch {}
+               }
+            }
+        }
+
         private async Task ButtonHandler(SocketMessageComponent component)
         {
             // Solo responder a nuestros botones
@@ -107,26 +128,40 @@ namespace DiscordAsistenciaBot.Services
             await component.DeferAsync(); // Indicar que estamos procesando
 
             bool success = false;
+            string content = ""; 
             string actionName = "";
 
             if (component.Data.CustomId == BTN_ENTRY)
             {
                 actionName = "ENTRADA";
-                success = await _attendanceClient.MarkEntryAsync();
+                (success, content) = await _attendanceClient.MarkEntryAsync();
             }
             else if (component.Data.CustomId == BTN_EXIT)
             {
                 actionName = "SALIDA";
-                success = await _attendanceClient.MarkExitAsync();
+                (success, content) = await _attendanceClient.MarkExitAsync();
             }
 
-            if (success)
+            string dmMessage;
+            if (content.ToLower().Contains("exito"))
             {
-                await component.FollowupAsync($"✅ **{actionName}** marcada correctamente a las {DateTime.Now:HH:mm}.", ephemeral: false);
+                dmMessage = $"✅ Has marcado **{actionName}**: {content}";
             }
             else
             {
-                await component.FollowupAsync($"❌ Hubo un error al marcar {actionName}. Por favor revisa la URL manualmente.", ephemeral: true);
+                dmMessage = $"⚠️ Ocurrió algo al marcar **{actionName}**: {content}";
+            }
+
+            // Intentar enviar DM
+            try 
+            {
+                await component.User.SendMessageAsync(dmMessage);
+                await component.FollowupAsync("📩 Te he enviado los detalles por Mensaje Directo.", ephemeral: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("No se pudo enviar DM: {Error}", ex.Message);
+                await component.FollowupAsync(dmMessage, ephemeral: true);
             }
         }
     }
