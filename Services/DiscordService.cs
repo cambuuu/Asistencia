@@ -94,7 +94,7 @@ namespace DiscordAsistenciaBot.Services
                 .WithCurrentTimestamp()
                 .Build();
 
-            await channel.SendMessageAsync(embed: embed, components: builder.Build());
+            await channel.SendMessageAsync(text: "@everyone", embed: embed, components: builder.Build());
             _logger.LogInformation("Mensaje de {Type} enviado al canal {Channel}", buttonId, channel.Name);
         }
 
