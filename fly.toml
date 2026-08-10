@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for discordasistenciabot on 2025-12-30T19:46:30-03:00
+# fly.toml app configuration file for discordasistenciabot
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -8,16 +8,12 @@ primary_region = 'gru'
 
 [build]
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+# Este bot es un worker: no expone HTTP, se conecta a Discord por WebSocket y
+# espera a las 08:29 / 18:00. No debe declarar [http_service]: con auto_stop
+# Fly apagaba la maquina por falta de trafico HTTP y el bot dejaba de marcar.
+# Sin servicios declarados, la maquina queda siempre encendida.
 
 [[vm]]
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
