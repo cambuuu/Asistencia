@@ -10,13 +10,13 @@ namespace DiscordAsistenciaBot.Services
         private readonly DiscordSocketClient _client;
         private readonly IConfiguration _configuration;
         private readonly ILogger<DiscordService> _logger;
-        private readonly AttendanceClient _attendanceClient;
+        private readonly BukAttendanceClient _attendanceClient;
 
         // IDs de Botones
         private const string BTN_ENTRY = "btn_entry_mark";
         private const string BTN_EXIT = "btn_exit_mark";
 
-        public DiscordService(DiscordSocketClient client, IConfiguration configuration, ILogger<DiscordService> logger, AttendanceClient attendanceClient)
+        public DiscordService(DiscordSocketClient client, IConfiguration configuration, ILogger<DiscordService> logger, BukAttendanceClient attendanceClient)
         {
             _client = client;
             _configuration = configuration;
@@ -142,15 +142,10 @@ namespace DiscordAsistenciaBot.Services
                 (success, content) = await _attendanceClient.MarkExitAsync();
             }
 
-            string dmMessage;
-            if (content.ToLower().Contains("exito"))
-            {
-                dmMessage = $"✅ Has marcado **{actionName}**: {content}";
-            }
-            else
-            {
-                dmMessage = $"⚠️ Ocurrió algo al marcar **{actionName}**: {content}";
-            }
+            // El resultado lo determina el cliente de Buk (HTTP + sesión), no el texto de la respuesta.
+            var dmMessage = success
+                ? $"✅ Has marcado **{actionName}** en Buk: {content}"
+                : $"⚠️ No se pudo marcar **{actionName}**: {content}";
 
             // Intentar enviar DM
             try 

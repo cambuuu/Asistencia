@@ -1,20 +1,22 @@
-# flyctl launch added from .gitignore
+# Docker interpreta patrones con "/" — los backslashes de Windows no coinciden con nada.
 # Build results
-**\[Bb]in
-**\[Oo]bj
+**/bin
+**/obj
 
 # User-specific files
-**\*.user
-**\*.userosscache
-**\*.sln.docstates
+**/*.user
+**/*.userosscache
+**/*.sln.docstates
 
 # Configuración con Secretos
-**\appsettings.json
-**\appsettings.Development.json
+**/appsettings.json
+**/appsettings.Development.json
 
 # VS Code
-**\.vscode
+**/.vscode
 
 # Visual Studio
-**\.vs
+**/.vs
+
+.git
 fly.toml

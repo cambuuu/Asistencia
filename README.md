@@ -1,6 +1,14 @@
 # Bot de Asistencia Discord (.NET 8)
 
-Bot diseñado para marcar asistencia automáticamente (Entrada/Salida) mediante botones en Discord, integrado con URLs externas.
+Bot diseñado para marcar asistencia (Entrada/Salida) mediante botones en Discord, integrado con el portal de **Buk** (`https://silva.buk.cl`).
+
+Al presionar el botón, el bot inicia sesión en Buk (login en dos pasos: correo → contraseña), lee el formulario `#web-marking-form` del portal y envía el mismo POST que dispara el botón "Entrada"/"Salida" de la página:
+
+```
+POST /employee_portal/web_marking/marcaje?sentido=ENTRADA|SALIDA
+```
+
+La sesión se reutiliza entre marcajes y se renueva automáticamente si caduca.
 
 ## Requisitos Previo
 1.  Tener instalado **.NET 8 SDK**.
@@ -9,14 +17,40 @@ Bot diseñado para marcar asistencia automáticamente (Entrada/Salida) mediante 
 
 ## Configuración
 
-1.  Abre el archivo `appsettings.json`.
-2.  Busca la línea `"Token": "PON_TU_TOKEN_AQUI"`.
-3.  Reemplaza `"PON_TU_TOKEN_AQUI"` por el token real de tu bot.
-4.  *(Opcional)* Verifica que el `TargetChannelId` sea correcto (`1455671434474160360`).
+Copia `appsettings.template.json` a `appsettings.json` y complétalo:
 
-Las URLs de marcado ya están configuradas:
--   **Entrada**: `...sentido=1...`
--   **Salida**: `...sentido=0...`
+```json
+{
+  "Discord": { "Token": "...", "TargetChannelId": 1455671434474160360 },
+  "Buk": {
+    "BaseUrl": "https://silva.buk.cl",
+    "Email": "tu.correo@silva.cl",
+    "Password": "...",
+    "Latitude": "",
+    "Longitude": ""
+  }
+}
+```
+
+`appsettings.json` está en `.gitignore` y `.dockerignore`: **nunca** se commitea ni entra a la imagen Docker.
+
+`Latitude`/`Longitude` son opcionales — el portal permite marcar sin geolocalización.
+
+### Verificar la configuración sin marcar
+
+```powershell
+dotnet run -- --test-buk
+```
+
+Hace login y busca el formulario de marcaje, **sin** registrar entrada ni salida.
+
+### Despliegue en Fly.io
+
+Las credenciales van como secrets (.NET los lee con `__` como separador de sección):
+
+```bash
+fly secrets set Discord__Token=... Buk__Email=tu.correo@silva.cl Buk__Password=...
+```
 
 ## Ejecución
 
@@ -38,7 +72,7 @@ Luego ejecuta el archivo `.exe` en la carpeta `publish`.
 1.  **Entrada**: A las 08:29 AM enviará un mensaje con botón verde "MARCAR ENTRADA".
 2.  **Salida**: A las 18:00 PM enviará un mensaje con botón azul "MARCAR SALIDA".
 3.  **Feriados**: El bot consulta automáticamente la API de feriados de Chile. Si es feriado, **NO** enviará mensaje.
-4.  **Botón**: Al presionar, el bot hace la petición web internamente. Si sale bien, responde "✅ Entrada marcada".
+4.  **Botón**: Al presionar, el bot inicia sesión en Buk y envía el marcaje. El resultado llega por Mensaje Directo con la respuesta del portal.
 
 ## Pruebas
 Si quieres probar que los botones funcionan sin esperar a la hora:
