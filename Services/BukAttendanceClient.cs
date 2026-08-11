@@ -231,13 +231,22 @@ namespace DiscordAsistenciaBot.Services
             var formIdx = portal.IndexOf("id=\"web-marking-form\"", StringComparison.OrdinalIgnoreCase);
             if (formIdx < 0) return null;
 
-            // El portal tiene varios authenticity_token; queremos el de este formulario.
             var scope = portal[formIdx..];
             var endIdx = scope.IndexOf("</form>", StringComparison.OrdinalIgnoreCase);
             if (endIdx > 0) scope = scope[..endIdx];
 
-            var token = ExtractAuthenticityToken(scope);
+            // OJO: hay que usar el token del <meta name="csrf-token">, NO el del
+            // formulario. Rails tiene per_form_csrf_tokens activado, asi que sirve en
+            // el HTML un token especifico del form (valido solo para su action="#"),
+            // pero rails-ujs lo reemplaza en el navegador por el global del meta. Como
+            // el bot no ejecuta JS, si usa el del formulario manda un token invalido y
+            // Buk responde 500 (no 422) con su pagina de error generica.
+            var metaToken = ExtractMetaCsrfToken(portal);
+            var token = metaToken ?? ExtractAuthenticityToken(scope);
             if (token is null) return null;
+
+            _logger.LogInformation("CSRF tomado del {Origen}.",
+                metaToken is not null ? "<meta csrf-token>" : "formulario (fallback)");
 
             var jobId = ExtractHiddenValue(scope, "job_id") ?? string.Empty;
             var defaultJobId = ExtractHiddenValue(scope, "default_job_id") ?? jobId;
@@ -426,6 +435,16 @@ namespace DiscordAsistenciaBot.Services
         }
 
         // -------------------------------------------------------------- parsing
+
+        /// <summary>Token global de &lt;meta name="csrf-token"&gt;, el que usa el navegador.</summary>
+        private static string? ExtractMetaCsrfToken(string html)
+        {
+            var m = Regex.Match(html, @"name=""csrf-token""\s+content=""([^""]+)""");
+            if (!m.Success)
+                m = Regex.Match(html, @"content=""([^""]+)""\s+name=""csrf-token""");
+
+            return m.Success ? HttpUtility.HtmlDecode(m.Groups[1].Value) : null;
+        }
 
         private static string? ExtractAuthenticityToken(string html)
         {
