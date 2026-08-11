@@ -197,7 +197,21 @@ namespace DiscordAsistenciaBot.Services
 
         // ------------------------------------------------------------- marcaje
 
-        private sealed record MarkingForm(string Token, string JobId, string DefaultJobId);
+        private sealed record MarkingForm(string Token, string JobId, string DefaultJobId, string Html)
+        {
+            /// <summary>
+            /// ic-id del boton del sentido pedido. Normalmente intercooler.js lo asigna
+            /// en el navegador, asi que el HTML servido puede no traerlo.
+            /// </summary>
+            public string IcIdFor(string sentido)
+            {
+                var btn = Regex.Match(Html, $@"<button[^>]*sentido={Regex.Escape(sentido)}[^>]*>", RegexOptions.IgnoreCase);
+                if (!btn.Success) return string.Empty;
+
+                var icId = Regex.Match(btn.Value, @"ic-id=""([^""]+)""");
+                return icId.Success ? icId.Groups[1].Value : string.Empty;
+            }
+        }
 
         /// <summary>Carga el portal y extrae los campos de #web-marking-form.</summary>
         private async Task<MarkingForm?> LoadMarkingFormAsync()
@@ -218,7 +232,7 @@ namespace DiscordAsistenciaBot.Services
             var jobId = ExtractHiddenValue(scope, "job_id") ?? string.Empty;
             var defaultJobId = ExtractHiddenValue(scope, "default_job_id") ?? jobId;
 
-            return new MarkingForm(token, jobId, defaultJobId);
+            return new MarkingForm(token, jobId, defaultJobId, scope);
         }
 
         private async Task<(bool Success, string Message)> PostMarcajeAsync(MarkingForm form, string sentido)
@@ -229,14 +243,35 @@ namespace DiscordAsistenciaBot.Services
             // La geolocalización es opcional: el propio portal avisa "Puedes marcar igualmente".
             var fields = new Dictionary<string, string>
             {
+                // intercooler.js antepone esto a los campos del formulario; el backend
+                // lo usa para reconocer la peticion como parcial.
+                ["ic-request"] = "true",
+                ["utf8"] = "✓",
                 ["authenticity_token"] = form.Token,
                 ["latitude"] = _configuration["Buk:Latitude"] ?? string.Empty,
                 ["longitude"] = _configuration["Buk:Longitude"] ?? string.Empty,
                 ["job_id"] = form.JobId,
-                ["default_job_id"] = form.DefaultJobId
+                ["default_job_id"] = form.DefaultJobId,
+                // El boton clickeado se serializa con su name y su value vacio.
+                ["button"] = string.Empty,
+                ["ic-element-name"] = "button",
+                ["_method"] = "POST"
             };
 
-            _logger.LogInformation("Marcando {Sentido} en {Url} (job_id={JobId})", sentido, url, form.JobId);
+            // ic-id lo asigna intercooler.js en runtime; solo lo mandamos si el HTML lo trae.
+            var icId = form.IcIdFor(sentido);
+            if (!string.IsNullOrEmpty(icId))
+                fields["ic-id"] = icId;
+
+            fields["ic-current-url"] = $"{_baseUrl}/static_pages/portal";
+
+            // Se registran los campos enviados (sin el CSRF) para poder diagnosticar un
+            // fallo desde los logs, sin tener que reproducir un marcaje real.
+            var enviados = string.Join("&", fields
+                .Where(f => f.Key != "authenticity_token")
+                .Select(f => $"{f.Key}={f.Value}"));
+
+            _logger.LogInformation("Marcando {Sentido} en {Url}. Campos: {Campos}", sentido, url, enviados);
 
             var result = await PostFormAsync(url, $"{_baseUrl}/static_pages/portal", fields, isIntercooler: true, csrfToken: form.Token);
 
@@ -245,7 +280,8 @@ namespace DiscordAsistenciaBot.Services
 
             if (!result.IsSuccess)
             {
-                _logger.LogWarning("Marcaje {Sentido} falló. HTTP {Status}. Cuerpo: {Body}", sentido, (int)result.StatusCode, text);
+                _logger.LogWarning("Marcaje {Sentido} falló. HTTP {Status}. Content-Type: {Type}. Cuerpo: {Body}",
+                    sentido, (int)result.StatusCode, result.ContentType, text);
 
                 // 401/403/422 suelen significar sesión o CSRF vencidos.
                 if (result.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
@@ -261,7 +297,7 @@ namespace DiscordAsistenciaBot.Services
 
         // --------------------------------------------------------------- HTTP
 
-        private sealed record HttpResult(HttpStatusCode StatusCode, string Body, string FinalUrl)
+        private sealed record HttpResult(HttpStatusCode StatusCode, string Body, string FinalUrl, string ContentType = "")
         {
             public bool IsSuccess => (int)StatusCode is >= 200 and < 400;
         }
@@ -286,7 +322,6 @@ namespace DiscordAsistenciaBot.Services
                 Content = new FormUrlEncodedContent(fields)
             };
 
-            request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             request.Headers.TryAddWithoutValidation("Origin", _baseUrl);
             request.Headers.TryAddWithoutValidation("Referer", referer);
 
@@ -295,16 +330,26 @@ namespace DiscordAsistenciaBot.Services
 
             if (isIntercooler)
             {
-                // Cabeceras que agrega intercooler.js; sin ellas Rails puede responder con la página completa.
+                // Cabeceras exactas de intercooler.js. El Accept importa: Buk usa
+                // intercooler-rails, que registra el MIME text/html-partial. Pidiendo
+                // text/html normal, Rails busca una vista completa que no existe para
+                // esta accion y responde 500.
+                request.Headers.TryAddWithoutValidation("Accept", "text/html-partial, */*; q=0.9");
                 request.Headers.TryAddWithoutValidation("X-IC-Request", "true");
-                request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+                request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", "POST");
+            }
+            else
+            {
+                request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             }
 
             using var response = await _httpClient.SendAsync(request);
             var body = await response.Content.ReadAsStringAsync();
             var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
 
-            return new HttpResult(response.StatusCode, body, finalUrl);
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? string.Empty;
+
+            return new HttpResult(response.StatusCode, body, finalUrl, contentType);
         }
 
         // -------------------------------------------------------------- parsing
