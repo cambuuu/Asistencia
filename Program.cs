@@ -42,5 +42,18 @@ if (args.Contains("--test-buk"))
     return ok ? 0 : 1;
 }
 
+// `dotnet run -- --preview-marcaje ENTRADA` imprime el body que se enviaria,
+// sin enviarlo, para contrastarlo con el request real del navegador.
+if (args.Contains("--preview-marcaje"))
+{
+    var buk = host.Services.GetRequiredService<BukAttendanceClient>();
+    var idx = Array.IndexOf(args, "--preview-marcaje");
+    var sentido = idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : "ENTRADA";
+
+    var (ok, message) = await buk.PreviewMarcajeAsync(sentido);
+    Console.WriteLine(ok ? message : $"FALLO: {message}");
+    return ok ? 0 : 1;
+}
+
 host.Run();
 return 0;

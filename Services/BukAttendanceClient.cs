@@ -200,16 +200,26 @@ namespace DiscordAsistenciaBot.Services
         private sealed record MarkingForm(string Token, string JobId, string DefaultJobId, string Html)
         {
             /// <summary>
-            /// ic-id del boton del sentido pedido. Normalmente intercooler.js lo asigna
-            /// en el navegador, asi que el HTML servido puede no traerlo.
+            /// ic-id del boton del sentido pedido. intercooler.js lo asigna en el navegador
+            /// segun el orden de los elementos, asi que el HTML servido no lo trae: en el
+            /// portal real son 6 (ENTRADA) y 7 (SALIDA) para el widget de escritorio.
             /// </summary>
-            public string IcIdFor(string sentido)
+            public string IcIdFor(string sentido, IConfiguration config)
             {
                 var btn = Regex.Match(Html, $@"<button[^>]*sentido={Regex.Escape(sentido)}[^>]*>", RegexOptions.IgnoreCase);
-                if (!btn.Success) return string.Empty;
+                if (btn.Success)
+                {
+                    var icId = Regex.Match(btn.Value, @"ic-id=""([^""]+)""");
+                    if (icId.Success) return icId.Groups[1].Value;
+                }
 
-                var icId = Regex.Match(btn.Value, @"ic-id=""([^""]+)""");
-                return icId.Success ? icId.Groups[1].Value : string.Empty;
+                var clave = sentido.Equals("ENTRADA", StringComparison.OrdinalIgnoreCase)
+                    ? "Buk:IcIdEntrada"
+                    : "Buk:IcIdSalida";
+
+                var porDefecto = sentido.Equals("ENTRADA", StringComparison.OrdinalIgnoreCase) ? "6" : "7";
+
+                return config[clave] ?? porDefecto;
             }
         }
 
@@ -239,41 +249,20 @@ namespace DiscordAsistenciaBot.Services
         {
             var url = $"{_baseUrl}/employee_portal/web_marking/marcaje?sentido={Uri.EscapeDataString(sentido)}";
 
-            // Mismos campos que intercooler.js envía vía ic-include="#web-marking-form".
-            // La geolocalización es opcional: el propio portal avisa "Puedes marcar igualmente".
-            var fields = new Dictionary<string, string>
-            {
-                // intercooler.js antepone esto a los campos del formulario; el backend
-                // lo usa para reconocer la peticion como parcial.
-                ["ic-request"] = "true",
-                ["utf8"] = "✓",
-                ["authenticity_token"] = form.Token,
-                ["latitude"] = _configuration["Buk:Latitude"] ?? string.Empty,
-                ["longitude"] = _configuration["Buk:Longitude"] ?? string.Empty,
-                ["job_id"] = form.JobId,
-                ["default_job_id"] = form.DefaultJobId,
-                // El boton clickeado se serializa con su name y su value vacio.
-                ["button"] = string.Empty,
-                ["ic-element-name"] = "button",
-                ["_method"] = "POST"
-            };
+            // Body replicado byte a byte del que arma intercooler.js en el navegador,
+            // capturado interceptando el XHR del portal. Detalles que importan y que no
+            // se pueden deducir del HTML servido:
+            //   - Los campos del formulario van DUPLICADOS (ic-include los serializa dos veces).
+            //   - ic-current-url es una ruta relativa, no una URL absoluta.
+            //   - NO se envia "button": el boton no tiene value, asi que jQuery lo omite.
+            //   - ic-id lo asigna intercooler.js en runtime, por eso no esta en el HTML.
+            var body = BuildMarcajeBody(form, sentido);
+            var token = Enc(form.Token);
 
-            // ic-id lo asigna intercooler.js en runtime; solo lo mandamos si el HTML lo trae.
-            var icId = form.IcIdFor(sentido);
-            if (!string.IsNullOrEmpty(icId))
-                fields["ic-id"] = icId;
+            _logger.LogInformation("Marcando {Sentido} en {Url}. Body: {Body}",
+                sentido, url, body.Replace(token, "<csrf>"));
 
-            fields["ic-current-url"] = $"{_baseUrl}/static_pages/portal";
-
-            // Se registran los campos enviados (sin el CSRF) para poder diagnosticar un
-            // fallo desde los logs, sin tener que reproducir un marcaje real.
-            var enviados = string.Join("&", fields
-                .Where(f => f.Key != "authenticity_token")
-                .Select(f => $"{f.Key}={f.Value}"));
-
-            _logger.LogInformation("Marcando {Sentido} en {Url}. Campos: {Campos}", sentido, url, enviados);
-
-            var result = await PostFormAsync(url, $"{_baseUrl}/static_pages/portal", fields, isIntercooler: true, csrfToken: form.Token);
+            var result = await PostRawAsync(url, $"{_baseUrl}/static_pages/portal", body, form.Token);
 
             var text = HtmlToText(result.Body);
             if (text.Length > 300) text = text[..300] + "…";
@@ -308,6 +297,90 @@ namespace DiscordAsistenciaBot.Services
             request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             using var response = await _httpClient.SendAsync(request);
             return await response.Content.ReadAsStringAsync();
+        }
+
+        private static string Enc(string value) => Uri.EscapeDataString(value);
+
+        private string BuildMarcajeBody(MarkingForm form, string sentido)
+        {
+            var lat = Enc(_configuration["Buk:Latitude"] ?? string.Empty);
+            var lon = Enc(_configuration["Buk:Longitude"] ?? string.Empty);
+            var token = Enc(form.Token);
+            var job = Enc(form.JobId);
+            var defJob = Enc(form.DefaultJobId);
+            var icId = Enc(form.IcIdFor(sentido, _configuration));
+
+            var camposForm = $"utf8=%E2%9C%93&authenticity_token={token}&latitude={lat}&longitude={lon}&job_id={job}&default_job_id={defJob}";
+
+            return "ic-request=true"
+                 + $"&{camposForm}"
+                 + $"&ic-element-name=button&ic-id={icId}&ic-trigger-name=button"
+                 + $"&{camposForm}"
+                 + "&ic-current-url=%2Fstatic_pages%2Fportal"
+                 + "&_method=POST";
+        }
+
+        /// <summary>
+        /// Arma el body del marcaje y lo devuelve SIN enviarlo, para poder compararlo
+        /// contra el request real del navegador sin registrar asistencia.
+        /// </summary>
+        public async Task<(bool Success, string Message)> PreviewMarcajeAsync(string sentido)
+        {
+            await _gate.WaitAsync();
+            try
+            {
+                var email = _configuration["Buk:Email"];
+                var password = _configuration["Buk:Password"];
+
+                if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+                    return (false, "Faltan las credenciales de Buk.");
+
+                var (ok, err) = await LoginAsync(email!, password!);
+                if (!ok) return (false, err);
+
+                var form = await LoadMarkingFormAsync();
+                if (form is null) return (false, "No se encontró #web-marking-form.");
+
+                return (true, BuildMarcajeBody(form, sentido));
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+
+        /// <summary>
+        /// POST con el body ya serializado, replicando exactamente los encabezados que
+        /// jQuery + intercooler.js envian desde el portal. Se usa para el marcaje, donde
+        /// el body lleva claves repetidas y por eso no puede armarse con un diccionario.
+        /// </summary>
+        private async Task<HttpResult> PostRawAsync(string url, string referer, string body, string csrfToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(body)
+            };
+
+            request.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-www-form-urlencoded")
+                {
+                    CharSet = "UTF-8"
+                };
+
+            request.Headers.TryAddWithoutValidation("Accept", "text/html-partial, */*; q=0.9");
+            request.Headers.TryAddWithoutValidation("X-IC-Request", "true");
+            request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", "POST");
+            request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+            request.Headers.TryAddWithoutValidation("X-CSRF-Token", csrfToken);
+            request.Headers.TryAddWithoutValidation("Origin", _baseUrl);
+            request.Headers.TryAddWithoutValidation("Referer", referer);
+
+            using var response = await _httpClient.SendAsync(request);
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? string.Empty;
+
+            return new HttpResult(response.StatusCode, responseBody, finalUrl, contentType);
         }
 
         private async Task<HttpResult> PostFormAsync(
